@@ -1,0 +1,6 @@
+version: "1"
+rules:
+  - base: main    # Branch in your fork to sync (e.g., "main")
+    upstream: importantimport/urara:master  # Replace with the upstream repository, e.g., "wei/pull"
+    mergeMethod: rebase    # Merge method: merge, squash, or rebase
+    autoClose: true       # Automatically close the PR after merging
