@@ -1,0 +1,287 @@
+---
+title: "Write an Async Runtime: Basic Concept"
+image: "/async-rust/async-rust.svg"
+tags:
+  - "Rust Lang"
+  - "Async Rust"
+---
+
+In this blog post we will talk about the basic concept that
+are around an async runtime in rust, and also the basic concept
+of the async paradigm.
+
+Lets get started 🦀
+
+## Introduction
+
+Before to get started to design our async runtime for rust, we should make clear the definition of async programming,
+and I like to think the async paradigm like a way to optimize a program
+to waste less time in dead running period like when you are reading a file or some
+data from the socket.
+
+But this is just what my mind has pick as definition, maybe because for me this
+side of the async programming is fascinating. However, the chapter _Why Async?_ of the
+[async rust book](https://rust-lang.github.io/async-book/01_getting_started/02_why_async.html)
+is pretty completed, I will quote part of it there.
+
+> Asynchronous programming, or async for short, is a concurrent programming model supported by an increasing number of programming languages. It lets you run a large number of concurrent tasks on a small number of OS threads, while preserving much of the look and feel of ordinary synchronous programming, through the async/await syntax.
+
+Well, why I'm writing this blog series on async rust and async runtime?
+
+I was always a monkey user of the async programming in JavaScript and in Dart, but I never
+pay attention much to it! When I start to learn rust and use it heavily in my projects
+I came across the rust async dilemma that is to choose a runtime to work with when
+you want to use async programming, and this dilemma blue my mind 🤓. So this was the
+moment where I start to remember that my master was in designing programming language,
+and this was the perfect moment to test if my exam teach me something useful!
+
+## Why there are so many async runtime?
+
+Know the answer to this question can clarify a lot of misconception around the rust async programming.
+The reason it is not that the rust developer are lazy and want that the community will implement one for
+them, but because when you are design a language like Rust, you know
+that a wrong decision that will begin stable in the language is forever!
+
+However, this is not the reason to not have a runtime in rust, or an official support to run
+rust async code in the rust language, but the problem is to define if the rust compiler need
+an default runtime.
+
+One of the main problem at the moment is that migrate code written for a runtime like [Tokio](https://tokio.rs/) to
+another runtime such [async-std](https://github.com/async-rs/async-std) is painful, mainly because the async
+support in the rust language is minimal and this force the async runtime developer to implement
+what they need in a custom way.
+
+The problem with this approach is that an application that use tokio runtime, required also
+some API provided by the runtime itself that make the application coupled and difficult to migrate
+to another runtime.
+
+So, the main problem in the async programming in rust is divided in two part, one is the fragmentation
+of the many runtime available across the ecosystem, and the second one is that the choice of the runtime
+will force other user to depend from it.
+
+To solve this problem the [async-wg](https://rust-lang.github.io/wg-async/welcome.html) is working on a very
+good road map that is available [here](https://rust-lang.github.io/wg-async/vision/roadmap.html).
+
+## Requirements to run async code
+
+In this section of the article we will focus on what are the concept required to run an async code, and we will
+introduce some code that will be available on [toy-async-rust](https://codeberg.org/vincenzopalazzo/toy-async-rust) Codeberg repository
+to make the reader able to run and play with it.
+
+Let's begin to analyze the previous chapter and some of the terminology use in it, suck as _Task_, in fact
+what is a Task?
+
+To start simple, a task is a piece of code that the runtime run for us. Now the question is why we need to provide
+a peace of code to the runtime, and the runtime will run it? Why we can not run it directly?
+
+Good question! This is the part that I love of the async runtime, with task the async runtime is able to organize
+the running of different tasks in a concurrent way, by simple stop the execution while there is a long operation
+where the current thread it is not doing much, and move the context to another more prolific task.
+
+So, now lets looks to some real code of [rio](https://github.com/vincenzopalazzo/rio) runtime that implement the task,
+and lets analyze it.
+
+We can simple define a task like:
+
+```rust
+type PinFuture = Mutex<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>;
+
+pub struct Task {
+    /// This is the actual `Future` we will poll inside of a `Task`. We `Box`
+    /// and `Pin` the `Future` when we create a task so that we don't need
+    /// to worry about pinning or more complicated things in the runtime.
+    future: PinFuture,
+    /// We need a way to check if the runtime should block on this task and
+    /// so we use a boolean here to check that!
+    block: bool,
+    // The waker is a self reference of the stack but if it is
+    // not None, this mean that it is already been pool
+    waker: Option<Arc<Waker>>,
+}
+```
+
+While reading the Task definition we can note some other basic concept or async rust that are
+`Waker` and `Future` there two rust type implement two important concet of Async Rust that are:
+
+- `Future`: You may know this concept from JavaScript under the name Promise, and it is a way to say "Ehi we will return somethings in the future!"
+(or I promise you to return something in the future). These `Future` is a type where you can call `.await` on it.
+- `Waker`: in my opinion this concept is the more obscure concept, not because it is difficult but because I did not find any 101 docs 
+that explain this concept other than the [async rust book](https://rust-lang.github.io/async-book/02_execution/03_wakeups.html).
+The `Waker` concept is where the magic happens, when a future is not completed (See next section) the `Waker` implement
+the logic to wakeup the Task because there is more job to do.
+
+
+## Future and  Waker magic
+
+The moment that I understand async programming while I was implementing [rio](https://github.com/vincenzopalazzo/rio) was when
+I implement the `Task` and understand how to use the `Waker` trait.
+
+However, before deep drive in why we need a `Waker` we need to deep drive inside the `Future` concept, and
+as introduced before I would like to think the `Future` as a contract between the programmer and the language
+where the programmer give the possibility to run the code in async way and the language promise to return something
+in the future.
+
+Let's see the following code to clarify a little bit the concept that the `Future` implement.
+
+```rust
+#![feature(async_fn_in_trait)]
+#![feature(associated_type_defaults)]
+use surf;
+use log::{debug, info};
+use rio_rt::runitime as rio;
+
+/// Make an async http request to Github API and return the result. 
+async fn ping_github(&self) -> Result<String, surf::Error> {
+    debug!("Running the https request");
+    let mut res = surf::get("https://api.github.com/octocat").await?;
+    let body = res.body_string().await?;
+    info!("{}", body);
+    Ok(body)
+}
+
+
+fn main() {
+    env_logger::init();
+ 
+    // Hey rio, run this function in an async way and
+    // print the result
+    rio::block_on(async move {
+        let res = ping_github().await?;
+        // print the option value
+        println!("{:?}", res);
+    });
+
+    rio::wait();
+}
+```
+
+In this case the async runtume call ping_github function that run an async http request,
+and in this case the http request can take time to return the response. Therefore,
+the async runtime can stop the `ping_github` task while it is waiting for the server and
+try to run somethings else.
+
+So, now the question is "How the async runtime know that the server is taking time to answer to the request?" 
+The answer is given by the `Future`, in fact the runtime run the future, where in this case the operation is
+called `pool` the future and analyze the result of the future that can assume one of the following result:
+
+- `Pool::Ready(_)`: is returned when the async function is completed and the result is ready;
+- `Pool::Pending`: is returned when the async function is still waiting to complete the operation, 
+where in this case is making the http request.
+
+You can imagine a `Future` implementation as follows:
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::SystemTime;
+
+/// Future sleep function
+pub struct Sleep {
+    /// When the future is created
+    now: SystemTime,
+    /// Waiting time specified by the user.
+    waiting_ms: u128,
+}
+
+/// Plain Sleep impl.
+impl Sleep {
+    pub fn new(ms: u128) -> Self {
+        Sleep {
+            now: SystemTime::now(),
+            waiting_ms: ms,
+        }
+    }
+}
+
+impl Future for Sleep {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.now.elapsed().unwrap().as_millis() >= self.waiting_ms {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+```
+
+Now, that we know how the runtime know the status of an async request, the other question is 
+"How the runtime mange a future result?" and the answer to this question is through the `Waker` trait.
+
+In fact, we said before that the `Waker` trait is the meccanism that rust use to notify the runtime that
+the task have some other work to do.
+
+Now, In our `Task` implementation we need to define the implementation for the `Waker` trait with the following code:
+
+```rust
+impl Wake for Task {
+    fn wake(self: Arc<Self>) {
+        if self.is_blocking() {
+            Runtime::get().inner_spawn_blocking(self);
+        } else {
+            Runtime::get().inner_spawn(self);
+        }
+    }
+}
+```
+
+Where in this case the `wake` method will `spawn` the task again with some internal API of the runtime. We will
+analyze the Runtime implementation in details in the next [Blog post]() for now we need just to know that we
+need that the task when need to wake up will put again itself in the runtime queue.
+
+
+Now, we need to define only the Task interface, but it is simple, the task need to have an implementation of the
+`pool` function that simulate the `Future` behaivord by returning `Pool::Ready(_)` or `Pool::Pending`.
+
+
+The [rio](https://github.com/vincenzopalazzo/rio) Task implementation is the following one:
+
+```rust
+impl Task {
+    pub(crate) fn new(block: bool, future: impl Future<Output = ()> + Send + 'static) -> Arc<Self> {
+        Runtime::get().size.fetch_add(1, Ordering::Relaxed);
+        Arc::new(Task {
+            future: Mutex::new(Box::pin(future)),
+            block,
+            waker: None,
+        })
+    }
+
+    /// Pool the following task!
+    pub fn poll(self: &Arc<Self>) -> Poll<()> {
+        // If the waker exist there is no need to
+        // poll a new waker, this feature is already in the background
+        if let None = self.waker {
+            let waker = self.waker();
+            let mut ctx = Context::from_waker(&waker);
+            // FIXME: this is the good place where to remove the element
+            // from the queue?
+            self.future.lock().unwrap().as_mut().poll(&mut ctx)
+        } else {
+            Poll::Pending
+        }
+    }
+
+    pub fn waker(self: &Arc<Self>) -> Waker {
+        self.clone().into()
+    }
+
+    /// The Task is blocking.
+    pub fn is_blocking(&self) -> bool {
+        self.block
+    }
+}
+```
+
+TODO: add point on why the waker is an Option (we can semplify it?)
+TODO: add point on how to pool and why we need a contex.
+
+### Final Thought
+
+TODO
+
+### License
+
+TODO
