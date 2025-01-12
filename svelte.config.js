@@ -24,7 +24,7 @@ export default {
       process.env.ADAPTER
         // @ts-expect-error adapter types
         ? adapter[process.env.ADAPTER.toLowerCase()]
-        : Object.keys(process.env).some(key => ['NETLIFY', 'VERCEL'].includes(key))
+        : Object.keys(process.env).some(key => ['CF_PAGES', 'NETLIFY', 'VERCEL'].includes(key))
           ? adapter.auto
           : adapter.static,
     csp: {
