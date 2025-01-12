@@ -1,17 +1,17 @@
 import type { SiteConfig } from '$lib/types/site'
 
 export const site: SiteConfig = {
-  author: {
-    avatar: '/assets/maskable@512.png',
-    bio: 'lorem ipsum dolor sit amet, consectetur adipiscing elit.',
-    name: 'John Doe',
-    status: '🌸',
-  },
-  description: 'Powered by SvelteKit/Urara',
-  domain: import.meta.env.URARA_SITE_DOMAIN ?? 'urara-demo.netlify.app',
+  protocol: 'https://',
+  domain: import.meta.env.URARA_SITE_DOMAIN ?? 'https://blog-vincenzopalazzo.netlify.app',
+  title: 'Hedwig Blog',
+  subtitle: 'An opinioneted blog with experiment description heavily powered by open source',
   lang: 'en-US',
-  protocol: import.meta.env.URARA_SITE_PROTOCOL ?? import.meta.env.DEV ? 'http://' : 'https://',
-  subtitle: 'Sweet & Powerful SvelteKit Blog Template',
-  themeColor: '#3D4451',
-  title: 'Urara',
+  description: 'Powered by SvelteKit/Urara',
+  author: {
+    name: 'Vincenzo Palazzo',
+    avatar: 'https://avatars.githubusercontent.com/u/17150045?v=4',
+    status: '🦍',
+    bio: 'It is not important who you are, but what you do that define yourself!'
+  },
+  themeColor: '#3D4451'
 }
